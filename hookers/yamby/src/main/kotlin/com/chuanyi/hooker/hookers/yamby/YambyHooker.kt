@@ -130,35 +130,56 @@ class YambyHooker : AppHooker {
             log.w("${Billing.MMKV} not found, skipping installForceEntitlement")
             return
         }
-        val bool = Boolean::class.javaPrimitiveType!!
+        val boolType = Boolean::class.javaPrimitiveType!!
+        val longType = Long::class.javaPrimitiveType!!
+        val intType = Int::class.javaPrimitiveType!!
 
-        val accessors = mmkv.declaredMethods.filter { method ->
-            method.returnType == bool && method.parameterTypes.any { it == String::class.java }
+        val allMethods = mmkv.declaredMethods.filter { method ->
+            method.parameterTypes.any { it == String::class.java }
         }
 
-        if (accessors.isEmpty()) {
-            log.w("MMKV 上未找到返回布尔的方法，跳过 force_entitlement")
-            return
-        }
-
-        accessors.forEach { method ->
+        allMethods.forEach { method ->
             runCatching {
                 method.createAfterHook("yamby.entitlement.${method.name}") { param ->
                     val key = param.args.firstOrNull { it is String } as? String ?: return@createAfterHook
+                    val lowerKey = key.lowercase()
                     val isTarget = key in targetKeys ||
-                        key.contains("pro", ignoreCase = true) ||
-                        key.contains("vip", ignoreCase = true) ||
-                        key.contains("valid", ignoreCase = true) ||
-                        key.contains("lifetime", ignoreCase = true)
+                        lowerKey.contains("pro") ||
+                        lowerKey.contains("vip") ||
+                        lowerKey.contains("valid") ||
+                        lowerKey.contains("lifetime") ||
+                        lowerKey.contains("expire") ||
+                        lowerKey.contains("purchase")
+
                     if (!isTarget) return@createAfterHook
-                    if (param.result == true) return@createAfterHook
-                    log.i("MMKV 拦截布尔键: $key -> true")
-                    param.result = true
+
+                    when (method.returnType) {
+                        boolType -> {
+                            if (param.result != true) {
+                                log.i("MMKV 拦截布尔键: $key -> true")
+                                param.result = true
+                            }
+                        }
+                        longType -> {
+                            val current = param.result as? Long ?: 0L
+                            if (current < 4102416000000L) {
+                                log.i("MMKV 拦截长整型键 (时间戳/过期时间): $key -> 4102416000000L")
+                                param.result = 4102416000000L
+                            }
+                        }
+                        intType -> {
+                            val current = param.result as? Int ?: 0
+                            if (current == 0) {
+                                log.i("MMKV 拦截整型键 (等级/状态): $key -> 1")
+                                param.result = 1
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        log.i("本地权益 ${targetKeys.joinToString()} 及含 pro/vip/valid/lifetime 的键已挂钩为已购（${accessors.size} 个布尔存取方法）")
+        log.i("本地权益 MMKV 已全面挂钩（监听布尔、时间戳 Long、状态 Int 等 ${allMethods.size} 个存取方法）")
     }
 
     /**

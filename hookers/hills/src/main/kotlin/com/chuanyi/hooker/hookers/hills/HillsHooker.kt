@@ -103,6 +103,22 @@ class HillsHooker : AppHooker {
 
     override fun onHook(scope: HookScope) {
         scope.log.i("Hills ${scope.versionCode} in ${scope.processName}")
+
+        // 门控：在 Hills 任何首屏 Activity 启动前阻塞等待假服务器与公钥替换就绪（通常仅需 300~500ms）
+        runCatching {
+            android.app.Activity::class.java.findMethod {
+                name("onCreate")
+                paramCount(1)
+            }.createBeforeHook("hills.gate.startup") { param ->
+                val activity = param.thisObject as? android.app.Activity ?: return@createBeforeHook
+                if (activity.packageName == "com.mountains.hills") {
+                    scope.log.i("Hills 首屏 Activity 启动：阻断等待伪造环境完全就绪...")
+                    val ok = VerifyBreaker.awaitReady(2500)
+                    scope.log.i("Hills 伪造环境就绪: $ok，放行首屏渲染")
+                }
+            }
+        }
+
         // Unconditional: which product id means "lifetime" is an input to two
         // separate features, and the hooks that learn it only read.
         Skus.watch(scope)
