@@ -109,13 +109,14 @@ class HillsHooker : AppHooker {
             android.app.Activity::class.java.findMethod {
                 name("onCreate")
                 paramCount(1)
-            }.createBeforeHook("hills.gate.startup") { param ->
-                val activity = param.thisObject as? android.app.Activity ?: return@createBeforeHook
-                if (activity.packageName == "com.mountains.hills") {
+            }.createInterceptHook("hills.gate.startup") { chain ->
+                val activity = chain.thisObject as? android.app.Activity
+                if (activity != null && activity.packageName == "com.mountains.hills") {
                     scope.log.i("Hills 首屏 Activity 启动：阻断等待伪造环境完全就绪...")
                     val ok = VerifyBreaker.awaitReady(2500)
                     scope.log.i("Hills 伪造环境就绪: $ok，放行首屏渲染")
                 }
+                chain.proceed()
             }
         }
 
