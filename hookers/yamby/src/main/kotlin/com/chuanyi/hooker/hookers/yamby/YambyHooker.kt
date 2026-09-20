@@ -145,14 +145,20 @@ class YambyHooker : AppHooker {
             runCatching {
                 method.createAfterHook("yamby.entitlement.${method.name}") { param ->
                     val key = param.args.firstOrNull { it is String } as? String ?: return@createAfterHook
-                    if (key !in targetKeys) return@createAfterHook
+                    val isTarget = key in targetKeys ||
+                        key.contains("pro", ignoreCase = true) ||
+                        key.contains("vip", ignoreCase = true) ||
+                        key.contains("valid", ignoreCase = true) ||
+                        key.contains("lifetime", ignoreCase = true)
+                    if (!isTarget) return@createAfterHook
                     if (param.result == true) return@createAfterHook
+                    log.i("MMKV 拦截布尔键: $key -> true")
                     param.result = true
                 }
             }
         }
 
-        log.i("本地权益 ${targetKeys.joinToString()} 已挂钩为已购（${accessors.size} 个布尔存取方法）")
+        log.i("本地权益 ${targetKeys.joinToString()} 及含 pro/vip/valid/lifetime 的键已挂钩为已购（${accessors.size} 个布尔存取方法）")
     }
 
     /**
@@ -161,17 +167,10 @@ class YambyHooker : AppHooker {
      * Play Billing 从回包 Bundle 里取三个**平行**数组：商品 ID、购买 JSON、
      * 签名，然后按下标逐条拼成 `Purchase`。三个数组各补一条，就等于凭空多了
      * 一笔已完成的订单。
-     *
-     * 返回的是副本而不是就地改原列表 —— 库对同一个 Bundle 会读两次
-     * （一次判空、一次解析），改原列表会导致重复追加、三个数组长度错位，
-     * 直接把应用打成 `IndexOutOfBoundsException`。
-     *
-     * 判重读的是 Bundle 里的原始数组（`get` 而非 `getStringArrayList`，
-     * 避免递归进本 hook），所以三个 key 得到的判定完全一致，长度不会跑偏。
      */
     private fun HookScope.installLifetime() {
-        val product = productId()
-        val json = Billing.purchaseJson(packageName, product)
+        val defaultProduct = productId()
+        val products = listOf(defaultProduct, "pro_lifetime", "lifetime", "yamby_pro", "yamby.pro").distinct()
 
         bundleMethod("getStringArrayList", String::class.java)
             .createAfterHook("yamby.lifetime.purchases") { param ->
@@ -179,24 +178,22 @@ class YambyHooker : AppHooker {
                 if (key !in Billing.PURCHASE_LISTS) return@createAfterHook
 
                 val bundle = param.thisObject as? Bundle ?: return@createAfterHook
-                // 判重刻意走 get 而不是 getStringArrayList：后者就是本 hook 自己，
-                // 且返回的是副本，读原始数组才能对三个 key 得到一致的判定。
                 @Suppress("DEPRECATION")
                 val stored = bundle.get(Billing.KEY_DATA_LIST) as? Collection<*>
-                if (Billing.ownsProduct(stored, product)) return@createAfterHook
+                if (products.any { Billing.ownsProduct(stored, it) }) return@createAfterHook
 
                 @Suppress("UNCHECKED_CAST")
                 val current = param.result as? ArrayList<String> ?: ArrayList()
                 val patched = ArrayList<String>(current)
-                patched += when (key) {
-                    Billing.KEY_ITEM_LIST -> product
-                    Billing.KEY_DATA_LIST -> json
-                    else -> ""              // 签名数组：应用不校验，空串即可
+                when (key) {
+                    Billing.KEY_ITEM_LIST -> patched.addAll(products)
+                    Billing.KEY_DATA_LIST -> products.forEach { patched.add(Billing.purchaseJson(packageName, it)) }
+                    else -> products.forEach { patched.add("") } // 签名数组
                 }
                 param.result = patched
             }
 
-        log.i("已在 Play 已购列表中注入 $product")
+        log.i("已在 Play 已购列表中注入 ${products.joinToString()}")
     }
 
     /**

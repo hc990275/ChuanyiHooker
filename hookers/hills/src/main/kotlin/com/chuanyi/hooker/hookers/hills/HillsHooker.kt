@@ -166,6 +166,10 @@ class HillsHooker : AppHooker {
         }
 
         fromPurchasesList.createAfterHook("hills.lifetime.purchases") { param ->
+            // 关键：在交给 Dart 之前必须等待验签接口重写完成，否则验证请求打到真实后端会导致首启被拒
+            if (!VerifyBreaker.awaitReady(ENDPOINT_WAIT_MS)) {
+                log.w("verification endpoint still not ready after ${ENDPOINT_WAIT_MS}ms, proceeding anyway")
+            }
             val sku = Skus.lifetime(this) ?: run {
                 log.w("no product id known yet, leaving the purchase list alone")
                 return@createAfterHook
