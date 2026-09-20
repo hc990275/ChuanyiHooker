@@ -18,12 +18,12 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
  * 机器人用户名是公开 handle，`https://t.me/<handle>` 这种写法在没装 Telegram 的设备上
  * 会落到网页版，比 `tg://` 深链稳 —— 打不开的兜底见 [openExternalLink]。
  */
-const val CommunityBotHandle = "@chuanyi_hooker_bot"
+const val CommunityBotHandle = "@s5gydl"
 
-private const val CommunityBotUrl = "https://t.me/chuanyi_hooker_bot"
+private const val CommunityBotUrl = "https://t.me/s5gydl"
 
 /**
- * 机器人入口那一行。放进 [top.yukonga.miuix.kmp.basic.Card] 里用。
+ * 官方交流群入口那一行。放进 [top.yukonga.miuix.kmp.basic.Card] 里用。
  *
  * 关于页和启动时的邀请弹窗共用这一份，两处长得一样是有意的：弹窗里点过一次，之后在
  * 关于页就知道该找哪一块。
@@ -35,7 +35,7 @@ fun CommunityBotRow() {
 
     ArrowPreference(
         title = CommunityBotHandle,
-        summary = "入群申请、适配提交",
+        summary = "官方交流群",
         onClick = { openExternalLink(context, uriHandler, CommunityBotUrl) },
     )
 }

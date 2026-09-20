@@ -70,34 +70,50 @@ internal object HillsHeap {
      * the case where a future build makes the scoring pick the wrong one; it
      * still comes out of the heap, so the length is right by construction.
      */
-    fun verifyUrl(scope: HookScope): String? {
-        url?.let { return it }
+    @Volatile
+    private var urls: List<String>? = null
+
+    /**
+     * All purchase-verification endpoints or base functions endpoints to redirect.
+     */
+    fun verifyUrls(scope: HookScope): List<String> {
+        urls?.let { return it }
 
         val pinned = scope.string(KEY_URL_MATCH)?.takeIf { it.isNotBlank() }
         val candidates = NativeHook.findAscii("https://", minLength = 12, maxLength = MAX_URL)
             .mapNotNull(::sanitiseUrl)
             .distinct()
-        if (candidates.isEmpty()) return null
+        if (candidates.isEmpty()) return emptyList()
 
-        val chosen = if (pinned != null) {
-            candidates.firstOrNull { it.contains(pinned, ignoreCase = true) }
-                ?: run {
-                    scope.log.w("no URL in memory contains '$pinned', falling back to scoring")
-                    bestByScore(scope, candidates)
-                }
+        val chosen: List<String> = if (pinned != null) {
+            val matching = candidates.filter { it.contains(pinned, ignoreCase = true) }
+            if (matching.isNotEmpty()) {
+                matching
+            } else {
+                scope.log.w("no URL in memory contains '$pinned', falling back to scoring")
+                resolveCandidates(scope, candidates)
+            }
         } else {
-            bestByScore(scope, candidates)
+            resolveCandidates(scope, candidates)
         }
 
-        if (chosen == null) {
-            // Worth seeing in full: it is the difference between "scanned too
-            // early" and "the endpoint no longer looks like a purchase check".
+        if (chosen.isEmpty()) {
             scope.log.d("no verification endpoint among ${candidates.size} URL(s): $candidates")
-            return null
+            return emptyList()
         }
-        url = chosen
-        scope.log.i("verification endpoint found in memory: $chosen (${chosen.length}B)")
+        urls = chosen
+        url = chosen.first()
+        scope.log.i("verification endpoint(s) found in memory: $chosen")
         return chosen
+    }
+
+    /**
+     * The primary purchase-verification endpoint, or null while the isolate has not
+     * deserialized it yet.
+     */
+    fun verifyUrl(scope: HookScope): String? {
+        url?.let { return it }
+        return verifyUrls(scope).firstOrNull()
     }
 
     /** The public key the app validates responses against, PEM text as stored. */
@@ -121,39 +137,30 @@ internal object HillsHeap {
 
     // -----------------------------------------------------------------------
 
-    /**
-     * Highest-scoring candidate, and of the equally-good ones the shortest.
-     *
-     * The shortest rule is not a tiebreak, it is a correctness requirement, and
-     * it has to be applied *after* scoring rather than to the raw candidate
-     * list. On device the same endpoint came back three times — 56, 57 and 64
-     * bytes, the longer two carrying a neighbour's first characters. A text run
-     * ends at the first non-text byte, and while a snapshot always puts a
-     * `(len<<1)|0x80` marker there, a *heap* neighbour is an object header whose
-     * low bytes are sometimes printable. So a run can overshoot, never
-     * undershoot, and the chosen string is fed straight back into an
-     * equal-length overwrite: too long and the write runs past the end of the
-     * string into whatever object follows.
-     *
-     * Collapsing prefixes across the *whole* list instead is what the first
-     * attempt did, and it found nothing at all: the app also holds its bare API
-     * origin, every endpoint under it starts with that, and so every endpoint
-     * got thrown away. Restricting the rule to candidates that already look like
-     * a verification endpoint keeps unrelated URLs from suppressing each other —
-     * an origin scores zero and is never in the pool to begin with.
-     */
-    private fun bestByScore(scope: HookScope, candidates: List<String>): String? {
+    private fun resolveCandidates(scope: HookScope, candidates: List<String>): List<String> {
         val scored = candidates
             .map { it to score(it) }
             .filter { it.second >= MIN_SCORE }
-        if (scored.isEmpty()) return null
 
-        val top = scored.maxOf { it.second }
-        val best = scored.filter { it.second == top }.map { it.first }
-        if (best.size > 1) {
-            scope.log.d("${best.size} equal candidates, taking the shortest: $best")
+        if (scored.isNotEmpty()) {
+            val top = scored.maxOf { it.second }
+            val best = scored.filter { it.second == top }.map { it.first }
+            return listOf(best.minBy { it.length })
         }
-        return best.minBy { it.length }
+
+        // Fallback for Hills >= 1.9.0:
+        // The endpoint is no longer a single literal, but constructed from the base
+        // Supabase functions URL (e.g. `https://api.hills.im/functions/v1/` or without slash).
+        val funcCandidates = candidates.filter { it.contains("/functions/v1", ignoreCase = true) }
+        if (funcCandidates.isNotEmpty()) {
+            scope.log.i("found ${funcCandidates.size} functions base URL(s): $funcCandidates")
+            return funcCandidates
+        }
+        return emptyList()
+    }
+
+    private fun bestByScore(scope: HookScope, candidates: List<String>): String? {
+        return resolveCandidates(scope, candidates).firstOrNull()
     }
 
     private fun score(candidate: String): Int {

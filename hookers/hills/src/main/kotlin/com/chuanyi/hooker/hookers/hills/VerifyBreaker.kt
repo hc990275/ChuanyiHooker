@@ -183,20 +183,25 @@ internal object VerifyBreaker {
      * closed port reads to the app as a failed check, which revokes.
      */
     private fun swapUrl(scope: HookScope, delay: Long): Boolean {
-        val original = HillsHeap.verifyUrl(scope) ?: run {
+        val targets = HillsHeap.verifyUrls(scope)
+        if (targets.isEmpty()) {
             scope.log.d("verification endpoint not in memory yet (${delay}ms)")
             return false
         }
-        upstream = original
+        upstream = targets.first()
 
-        val replacement = replacementFor(scope, original) ?: return false
-        val written = NativeHook.replaceAscii(original, replacement)
-        if (written <= 0) {
-            scope.log.d("endpoint found but not writable yet (${delay}ms)")
-            return false
+        var anyWritten = false
+        for (original in targets) {
+            val replacement = replacementFor(scope, original) ?: continue
+            val written = NativeHook.replaceAscii(original, replacement)
+            if (written > 0) {
+                anyWritten = true
+                scope.log.i("verification endpoint rewritten in $written place(s) -> $original -> $replacement")
+            } else {
+                scope.log.d("endpoint $original found but not writable yet (${delay}ms)")
+            }
         }
-        scope.log.i("verification endpoint rewritten in $written place(s) -> $replacement")
-        return true
+        return anyWritten
     }
 
     /**

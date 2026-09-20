@@ -76,23 +76,46 @@ internal object Entitlement {
      * 也都不与入口那 8 个被改写的字节重叠 —— 重叠的话补丁一落，锚点就没了。
      */
     val SITES = listOf(
-        // ★ 根。Riverpod 生成的顶层计算函数，紧跟在 init:isSubscribedProvider 后面。
-        //    原逻辑：watch(subscriptionNotifier) → 取订阅对象 → 取里面那个 bool；
-        //    任意一层为 null 就返回 false。补成恒 true，界面和功能一起认账。
+        // ★ 根。isSubscribed(Ref) [isSubscribedProvider]
+        // CapyPlayer 1.1.5 (11512) 唯一锚点 (0x7849d4) -> entry 0x7849b8
         Site(
             id = "subscribed",
             dartName = "isSubscribed(Ref) [isSubscribedProvider]",
+            anchor = "20F040B800801C8B706F4AF9",
+            anchorOffset = 0x1c,
+            result = Result.TRUE,
+        ),
+        // CapyPlayer 1.1.3 (11312) 兼容锚点
+        Site(
+            id = "subscribed_v113",
+            dartName = "isSubscribed(Ref) [isSubscribedProvider] (v1.1.3)",
             anchor = "89040054403F40F900B44EF9",
             anchorOffset = 0x14,
             result = Result.TRUE,
         ),
-        // proFeatureEntitlement(Ref, feature)：三条出口，最后一条就是 return
-        // watch(isSubscribed)。根补上之后它自然为真，这里钉死只是不依赖求值时序。
+        // proFeatureEntitlement(Ref, feature)：1.1.5 唯一存在 (0x784860) -> entry 0x784800
         Site(
             id = "entitlement",
             dartName = "proFeatureEntitlement(Ref, ProFeature)",
             anchor = "FF0110EB29080054403F40F9",
-            anchorOffset = 0x10,
+            anchorOffset = 0x60,
+            result = Result.TRUE,
+        ),
+        // SubscriptionNotifier._checkIfActive
+        // CapyPlayer 1.1.5 (11512) 16字节唯一锚点 (0x8220a8)
+        Site(
+            id = "active",
+            dartName = "SubscriptionNotifier._checkIfActive",
+            anchor = "EF4100D1E00302AAE20303AAA3831FF8",
+            anchorOffset = 0x8,
+            result = Result.TRUE,
+        ),
+        // CapyPlayer 1.1.3 (11312) 兼容锚点
+        Site(
+            id = "active_v113",
+            dartName = "SubscriptionNotifier._checkIfActive (v1.1.3)",
+            anchor = "EF4100D1E00302AAE20303AA",
+            anchorOffset = 0x8,
             result = Result.TRUE,
         ),
         Site(
@@ -108,13 +131,6 @@ internal object Entitlement {
             anchor = "A0831FF8403F40F900984EF9",
             anchorOffset = 0x20,
             result = Result.NULL,
-        ),
-        Site(
-            id = "active",
-            dartName = "SubscriptionNotifier._checkIfActive",
-            anchor = "EF4100D1E00302AAE20303AA",
-            anchorOffset = 0x8,
-            result = Result.TRUE,
         ),
     )
 

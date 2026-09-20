@@ -87,16 +87,17 @@ class YambyHooker : AppHooker {
     )
 
     override fun isCompatible(scope: HookScope): Boolean {
-        val purchase = scope.classOrNull(Billing.PURCHASE)
-        if (purchase == null) {
-            scope.log.w("找不到 ${Billing.PURCHASE}，Play Billing 库可能被换掉了")
-            return false
+        val purchase = Billing.findPurchaseClass(scope)
+        if (purchase != null) return true
+
+        val proxy = scope.classOrNull("com.android.billingclient.api.ProxyBillingActivity")
+        if (proxy != null) {
+            scope.log.i("检测到 Play Billing 运行环境 (混淆版 ProxyBillingActivity)")
+            return true
         }
-        return runCatching {
-            purchase.getConstructor(String::class.java, String::class.java)
-        }.onFailure {
-            scope.log.w("Purchase 没有 (String, String) 构造器，版本不兼容")
-        }.isSuccess
+
+        scope.log.w("找不到 Play Billing 运行环境，版本可能不兼容")
+        return false
     }
 
     override fun onHook(scope: HookScope) {
@@ -123,31 +124,35 @@ class YambyHooker : AppHooker {
      * 三个一起改成 true 正好：读取得到已购，写入得到「写成功」，都无害。
      */
     private fun HookScope.installForceEntitlement() {
-        val key = string(KEY_ENTITLEMENT)?.takeIf { it.isNotBlank() } ?: Billing.ENTITLEMENT_KEY
-        val mmkv = classOrNull(Billing.MMKV) ?: error("${Billing.MMKV} not found")
+        val customKey = string(KEY_ENTITLEMENT)?.takeIf { it.isNotBlank() }
+        val targetKeys = if (customKey != null) setOf(customKey) else Billing.ENTITLEMENT_KEYS
+        val mmkv = classOrNull(Billing.MMKV) ?: run {
+            log.w("${Billing.MMKV} not found, skipping installForceEntitlement")
+            return
+        }
         val bool = Boolean::class.javaPrimitiveType!!
 
-        fun plainBooleanMethods(vararg params: Class<*>) = mmkv.declaredMethods.filter { method ->
-            !Modifier.isNative(method.modifiers) &&
-                method.returnType == bool &&
-                method.parameterTypes.contentEquals(params)
+        val accessors = mmkv.declaredMethods.filter { method ->
+            method.returnType == bool && method.parameterTypes.any { it == String::class.java }
         }
 
-        // (String, boolean): 取值 / 存值
-        val accessors = plainBooleanMethods(String::class.java, bool)
-        // (String): 存在性判断
-        val probes = plainBooleanMethods(String::class.java)
-        if (accessors.isEmpty()) error("MMKV 上没有 (String, boolean) 形状的布尔存取方法")
+        if (accessors.isEmpty()) {
+            log.w("MMKV 上未找到返回布尔的方法，跳过 force_entitlement")
+            return
+        }
 
-        (accessors + probes).forEach { method ->
-            method.createAfterHook("yamby.entitlement.${method.name}") { param ->
-                if (param.arg(0) != key) return@createAfterHook
-                if (param.result == true) return@createAfterHook
-                param.result = true
+        accessors.forEach { method ->
+            runCatching {
+                method.createAfterHook("yamby.entitlement.${method.name}") { param ->
+                    val key = param.args.firstOrNull { it is String } as? String ?: return@createAfterHook
+                    if (key !in targetKeys) return@createAfterHook
+                    if (param.result == true) return@createAfterHook
+                    param.result = true
+                }
             }
         }
 
-        log.i("本地权益 $key 已强制为已购（${accessors.size} 个存取 + ${probes.size} 个判存）")
+        log.i("本地权益 ${targetKeys.joinToString()} 已挂钩为已购（${accessors.size} 个布尔存取方法）")
     }
 
     /**
@@ -174,7 +179,6 @@ class YambyHooker : AppHooker {
                 if (key !in Billing.PURCHASE_LISTS) return@createAfterHook
 
                 val bundle = param.thisObject as? Bundle ?: return@createAfterHook
-                if (!isPurchasesReply(bundle)) return@createAfterHook
                 // 判重刻意走 get 而不是 getStringArrayList：后者就是本 hook 自己，
                 // 且返回的是副本，读原始数组才能对三个 key 得到一致的判定。
                 @Suppress("DEPRECATION")
@@ -220,8 +224,6 @@ class YambyHooker : AppHooker {
                 val key = param.arg(0) as? String ?: return@createAfterHook
                 if (key !in Billing.PURCHASE_LISTS) return@createAfterHook
                 if (param.result == true) return@createAfterHook
-                val bundle = param.thisObject as? Bundle ?: return@createAfterHook
-                if (!isPurchasesReply(bundle)) return@createAfterHook
                 param.result = true
             }
 
@@ -233,17 +235,17 @@ class YambyHooker : AppHooker {
      * 上面两项都没有可以搭车的 Bundle。
      *
      * 这里改为主动投递：hook 回调对象的构造器把实例抓在手里，等计费客户端
-     * 连接完成后自己调一次。回调方法是 nmmp 原生方法 —— 但这里只是**调用**
-     * 它，不需要 hook，反射调用原生方法与调用普通方法没有区别。
-     *
-     * 延迟是为了排在真正的查询结果之后：真结果先到，我们再覆盖，
-     * 而不是反过来被它冲掉。
+     * 连接完成后自己调一次。
      */
     private fun HookScope.installAnnounce() {
-        val listenerClass = resolveListenerClass()
-            ?: error("找不到购买回调类；可用 listener_class 设置手动指定")
-        val delivery = Billing.deliveryMethod(listenerClass)
-            ?: error("${listenerClass.name} 上没有 (BillingResult, List) 形状的方法")
+        val listenerClass = resolveListenerClass() ?: run {
+            log.w("找不到购买回调类，跳过主动补发（由 lifetime 正常承接）")
+            return
+        }
+        val delivery = Billing.deliveryMethod(listenerClass) ?: run {
+            log.w("${listenerClass.name} 上没有 (BillingResult, List) 形状的方法，跳过主动补发")
+            return
+        }
         val delay = int(KEY_ANNOUNCE_DELAY, DEFAULT_ANNOUNCE_DELAY_MS).toLong()
 
         listenerClass.findAllConstructors().forEach { constructor ->
@@ -294,11 +296,17 @@ class YambyHooker : AppHooker {
      * 构造参数最省事 —— 那就是 Play 原样返回的 JSON 与签名。
      */
     private fun HookScope.installBillingLog() {
-        val purchase = classOrNull(Billing.PURCHASE) ?: error("${Billing.PURCHASE} not found")
-        purchase.getConstructor(String::class.java, String::class.java)
-            .createAfterHook("yamby.log.purchase") { param ->
-                log.i("Purchase: ${param.arg(0)}")
+        val purchase = Billing.findPurchaseClass(this)
+        if (purchase != null) {
+            runCatching {
+                purchase.getConstructor(String::class.java, String::class.java)
+                    .createAfterHook("yamby.log.purchase") { param ->
+                        log.i("Purchase: ${param.arg(0)}")
+                    }
             }
+        } else {
+            log.w("Purchase 类未定位，跳过 Purchase 构造器日志")
+        }
 
         bundleMethod("get", String::class.java)
             .createAfterHook("yamby.log.response_code") { param ->

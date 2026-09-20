@@ -86,6 +86,11 @@ def find_verify_url(data: bytes, must_contain: bytes | None = None):
     scored = [(offset, url, _score(url)) for offset, url in candidates]
     scored = [entry for entry in scored if entry[2] >= _MIN_SCORE]
     if not scored:
+        func_candidates = [c for c in candidates if b"/functions/v1" in c[1]]
+        if func_candidates:
+            # Prefer shortest candidate (e.g. https://api.hills.im/functions/v1)
+            winner = min(func_candidates, key=lambda c: len(c[1]))
+            return winner[0], winner[1]
         return None
     best = max(entry[2] for entry in scored)
     # Shortest among equals: the run can only ever overshoot, so the shortest

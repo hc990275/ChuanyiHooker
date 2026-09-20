@@ -26,9 +26,8 @@ android {
         }
 
         ndk {
-            // Dobby supports these four; keep the list explicit so a new ABI
-            // never silently ships untested.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            // 现代 64 位双架构：安卓 x64 (x86_64) 与 arm64-v8a，去除 32 位老旧冗余
+            abiFilters += listOf("x86_64", "arm64-v8a")
         }
     }
 

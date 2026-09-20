@@ -277,8 +277,14 @@ internal object VerifyServer {
             scope.log.w("no upstream endpoint known, answering 502")
             return Response(502, "application/json", """{"error":"no upstream"}""".toByteArray())
         }
+        val cleanPath = request.path.replaceFirst(Regex("^/+p+(/|$)"), "/")
+        val targetUrl = if (upstream.contains("google-verify-purchase") || cleanPath == "/") {
+            upstream
+        } else {
+            upstream.trimEnd('/') + cleanPath
+        }
         val connection = runCatching {
-            (URL(upstream).openConnection() as HttpURLConnection).apply {
+            (URL(targetUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = request.method
                 connectTimeout = UPSTREAM_TIMEOUT_MS
                 readTimeout = UPSTREAM_TIMEOUT_MS

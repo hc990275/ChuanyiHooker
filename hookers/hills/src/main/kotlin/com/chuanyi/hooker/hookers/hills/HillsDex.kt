@@ -79,10 +79,14 @@ internal object HillsDex {
      */
     private val PINNED = mapOf(
         HANDLER to "io.flutter.plugins.inapppurchase.MethodCallHandlerImpl",
-        TRANSLATOR to "io.flutter.plugins.inapppurchase.Translator",
+        TRANSLATOR to "io.flutter.plugins.inapppurchase.TranslatorKt",
         MESSAGES to "io.flutter.plugins.inapppurchase.Messages",
         PREFS_BACKEND to "io.flutter.plugins.sharedpreferences.SharedPreferencesBackend",
         PLAYER_CONFIG to "com.mountains.player.models.PlayerConfig",
+    )
+
+    private val PINNED_FALLBACK = mapOf(
+        TRANSLATOR to "io.flutter.plugins.inapppurchase.Translator",
     )
 
     /**
@@ -156,6 +160,7 @@ internal object HillsDex {
 
         // Before paying for a scan, check whether there is anything to look for.
         PINNED[key]?.takeIf { scope.classOrNull(it) != null }?.let { return it }
+        PINNED_FALLBACK[key]?.takeIf { scope.classOrNull(it) != null }?.let { return it }
 
         ensureScanned(scope)
         return found[key]?.takeIf { scope.classOrNull(it) != null }

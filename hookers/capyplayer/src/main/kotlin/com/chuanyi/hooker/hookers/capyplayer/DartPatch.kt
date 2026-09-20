@@ -150,7 +150,7 @@ internal object DartPatch {
 
         val entry = anchorAt - site.anchorOffset
         val head = NativeHook.readMemory(entry, PROLOGUE.size)
-        if (head == null || !head.contentEquals(PROLOGUE)) {
+        if (head == null || !isPrologue(head)) {
             log.w(
                 "${site.id}：${entry.hex()} 处不是函数序言（读到 ${head?.hex() ?: "null"}）——" +
                     "锚点偏移 ${site.anchorOffset} 已经不对，跳过",
@@ -158,6 +158,21 @@ internal object DartPatch {
             return Located(site, 0L, matches)
         }
         return Located(site, entry, matches)
+    }
+
+    private fun isPrologue(head: ByteArray): Boolean {
+        if (head.contentEquals(PROLOGUE)) return true
+        if (head.size >= 4) {
+            val w0 = (head[0].toInt() and 0xFF) or
+                ((head[1].toInt() and 0xFF) shl 8) or
+                ((head[2].toInt() and 0xFF) shl 16) or
+                ((head[3].toInt() and 0xFF) shl 24)
+            // sub sp, sp, #imm (0xD1000000..0xD1FFFFFF)
+            if ((w0 and 0xFFC00000.toInt()) == 0xD1000000.toInt()) return true
+            // b +imm (0x14000000..0x14FFFFFF)
+            if ((w0 ushr 26) == 0b000101) return true
+        }
+        return false
     }
 
     /**

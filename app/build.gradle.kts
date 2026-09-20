@@ -183,6 +183,11 @@ android {
         // 见上面「版本号」那节：两个值都由 HEAD 的提交时间算出来，不手工维护。
         versionCode = moduleVersionCode
         versionName = moduleVersionName
+
+        ndk {
+            // 现代 64 位双架构：安卓 x64 (x86_64) 与 arm64-v8a，去除 32 位老旧冗余
+            abiFilters += listOf("x86_64", "arm64-v8a")
+        }
     }
 
     buildFeatures {
@@ -387,32 +392,11 @@ dependencies {
 
     // --- hookers ---------------------------------------------------------
     // One line per target app. Discovery and scope are automatic.
-    //
-    // tgguard 不是普通目标：它读 TG 客户端的本地会话库，产出模块的激活凭据。
-    // 少了它整个模块都装不上东西，所以它排在最前面，别跟着字母序被挪走。
-    implementation(project(":hookers:tgguard"))
-    implementation(project(":hookers:paisa"))
+    // 仅保留用户指定的 hills、yamby 与 capyplayer 模块
     implementation(project(":hookers:hills"))
-    implementation(project(":hookers:skypulse"))
     implementation(project(":hookers:yamby"))
-    implementation(project(":hookers:astraflow"))
     implementation(project(":hookers:capyplayer"))
-    implementation(project(":hookers:flix"))
-    implementation(project(":hookers:secretshoot"))
-    implementation(project(":hookers:gameclick"))
-    implementation(project(":hookers:zenneko"))
-    implementation(project(":hookers:gifshop"))
-    implementation(project(":hookers:instashot"))
-    implementation(project(":hookers:esj"))
-    implementation(project(":hookers:chuckle"))
-    implementation(project(":hookers:womic"))
-    implementation(project(":hookers:airmusic"))
-    implementation(project(":hookers:gboard"))
-    implementation(project(":hookers:bridgeaudio"))
-    implementation(project(":hookers:wink"))
-    implementation(project(":hookers:poweramp"))
-    implementation(project(":hookers:cellularpro"))
-    implementation(project(":hookers:osmin"))
+    implementation(project(":hookers:tgguard"))
     // ---------------------------------------------------------------------
 
     compileOnly(libs.libxposed.api)

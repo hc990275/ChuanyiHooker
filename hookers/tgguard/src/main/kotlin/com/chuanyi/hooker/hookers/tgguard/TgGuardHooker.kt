@@ -179,26 +179,23 @@ class TgGuardHooker : AppHooker {
         val loggedIn = TelegramClients.loggedInAccounts(context)
         val account = TelegramClients.currentAccount(context, scope.classLoader)
 
-        val (subject, result) = when {
-            account != null -> {
-                val path = TelegramClients.databaseOf(dataDir, account)
-                "账号 $account" to NativeHook.activationProbe(path, moduleVersion, sourceHash)
-            }
+        var subject = if (account != null) "账号 $account" else "全局槽位"
+        var result = if (account != null) {
+            val path = TelegramClients.databaseOf(dataDir, account)
+            NativeHook.activationProbe(path, moduleVersion, sourceHash)
+        } else {
+            probeEverySlot(dataDir, moduleVersion, sourceHash)
+        }
 
-            // 一个账号都没登录 —— 全退了。这本身就是权威的「这个客户端不在群里」，
-            // 不能因为「确定不了当前账号」就跳过，否则退出登录之后令牌会一直留着。
-            // 仍然走一遍库：退登录时上游会把表清空（表还在、行没了），于是探测给出
-            // ABSENT；而如果连表都没有（从没登录过的空壳），得到 UNREADABLE，
-            // 那种情况下本来也不会有自己签发的令牌。
-            loggedIn.isEmpty() ->
-                "无登录账号" to probeEverySlot(dataDir, moduleVersion, sourceHash)
-
-            // 有账号登录着，却解析不出是哪个。**什么都不做**，绝不退回账号 0 ——
-            // 多账号用户的 0 号槽位常常是个 4 KiB 的空壳库，探它只会得出「读不出
-            // 结论」，然后把人卡在未激活上，而界面还会给出完全不相干的原因。
-            else -> {
-                scope.log.w("有账号登录着（$loggedIn）但解析不出当前是哪个，本轮跳过")
-                return lastIssuedAt
+        // 强力兜底：只要当前账号未能命中 FOUND，无条件遍历全量槽位探测！
+        if (result.outcome != NativeHook.ProbeOutcome.FOUND) {
+            val fallback = probeEverySlot(dataDir, moduleVersion, sourceHash)
+            if (fallback.outcome == NativeHook.ProbeOutcome.FOUND) {
+                subject = "槽位兜底匹配"
+                result = fallback
+            } else if (result.outcome == NativeHook.ProbeOutcome.UNREADABLE) {
+                // 如果单账号库读不出来，但兜底扫到了明确的 ABSENT，采纳兜底
+                result = fallback
             }
         }
 

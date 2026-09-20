@@ -73,6 +73,7 @@ internal object Billing {
      * every launch, which makes it the earliest point where Pro can be true.
      */
     const val ENTITLEMENT_KEY = "validBefore"
+    val ENTITLEMENT_KEYS = setOf("validBefore", "isPro", "is_pro", "pro", "lifetime")
 
     /**
      * Play's own payload, field for field.
@@ -99,8 +100,35 @@ internal object Billing {
     fun ownsProduct(dataList: Collection<*>?, product: String): Boolean =
         dataList?.any { it is String && it.contains("\"productId\":\"$product\"") } == true
 
+    @Volatile
+    private var cachedPurchaseClass: Class<*>? = null
+
+    /**
+     * Locates the Purchase class, supporting both clean builds and R8 obfuscated builds.
+     */
+    fun findPurchaseClass(scope: HookScope): Class<*>? {
+        cachedPurchaseClass?.let { return it }
+        val clean = scope.classOrNull(PURCHASE)
+        if (clean != null && runCatching { clean.getConstructor(String::class.java, String::class.java) }.isSuccess) {
+            cachedPurchaseClass = clean
+            return clean
+        }
+        val obfuscatedCandidates = listOf(
+            "o7.\u06E5\u0696\u0697\u06EC\u06A0\u06A4\u069C",
+            "o7.\u06E5\u06E7\u06E7\u06E6\u0699\u0696",
+        )
+        for (name in obfuscatedCandidates) {
+            val clazz = scope.classOrNull(name) ?: continue
+            if (runCatching { clazz.getConstructor(String::class.java, String::class.java) }.isSuccess) {
+                cachedPurchaseClass = clazz
+                return clazz
+            }
+        }
+        return null
+    }
+
     fun newPurchase(scope: HookScope, json: String): Any? = runCatching {
-        val clazz = scope.classOrNull(PURCHASE) ?: return null
+        val clazz = findPurchaseClass(scope) ?: return null
         clazz.getConstructor(String::class.java, String::class.java)
             .newInstance(json, "")
     }.getOrNull()

@@ -51,12 +51,22 @@ using i64 = int64_t;
 // 要找的群
 // ---------------------------------------------------------------------------
 
-/// `chats.uid`：原始群 id，正数。
-constexpr i64 kChatRowId = 4404720340LL;
-/// `dialogs.did`：Telegram-Android 8.x 之后的内部表示。
-constexpr i64 kDialogInternal = -4404720340LL;
-/// `dialogs.did`：Bot API 表示，个别 TDLib 系分支用它。
-constexpr i64 kDialogBotApi = -1004404720340LL;
+/// `chats.uid`：@s5gydl 超级群原生 rowid（正数）。
+constexpr i64 kChatRowId = 3888375175LL;
+/// `dialogs.did`：Telegram-Android 8.x 之后内部表示（负号+channel_id）。
+constexpr i64 kDialogInternal = -3888375175LL;
+/// `dialogs.did`：Bot API 扩展表示（-100XXXXXXXXX）。
+constexpr i64 kDialogBotApi = -1003888375175LL;
+
+/// 关联频道 id（linked_chat_id）
+constexpr i64 kChatRowIdLinked = 1761952471LL;
+constexpr i64 kDialogInternalLinked = -1761952471LL;
+constexpr i64 kDialogBotApiLinked = -1001761952471LL;
+
+/// 历史兼容旧群 id（部分老用户数据库可能残留）
+constexpr i64 kChatRowIdLegacy = 4404720340LL;
+constexpr i64 kDialogInternalLegacy = -4404720340LL;
+constexpr i64 kDialogBotApiLegacy = -1004404720340LL;
 
 /// 令牌头，用来把「明显不是我们签的东西」在算 MAC 之前就挡掉。
 constexpr u32 kTokenMagic = 0x43595431u; // 'CYT1'
@@ -524,6 +534,40 @@ void IssueToken(u8 *out, u32 day, u32 nonce, u32 sourceHash, u32 moduleVersion) 
 // 两个入口动作
 // ---------------------------------------------------------------------------
 
+bool ScanPageForPattern(const u8 *page, u32 pageSize) {
+    if (pageSize < 6) return false;
+    const u32 end = pageSize - 6;
+    for (u32 i = 0; i <= end; ++i) {
+        // "s5gydl" / "S5GYDL"
+        const u8 c0 = page[i];
+        if ((c0 == 's' || c0 == 'S') && page[i + 1] == '5') {
+            const u8 c2 = page[i + 2];
+            const u8 c3 = page[i + 3];
+            const u8 c4 = page[i + 4];
+            const u8 c5 = page[i + 5];
+            if ((c2 == 'g' || c2 == 'G') &&
+                (c3 == 'y' || c3 == 'Y') &&
+                (c4 == 'd' || c4 == 'D') &&
+                (c5 == 'l' || c5 == 'L')) {
+                return true;
+            }
+        }
+    }
+    // 群名称 UTF-8 "公益代理" (0xe5 0x85 0xac 0xe7 0x9b 0x8a 0xe4 0xbb 0xa3 0xe7 0x90 0x86)
+    if (pageSize >= 12) {
+        const u32 endZh = pageSize - 12;
+        for (u32 i = 0; i <= endZh; ++i) {
+            if (page[i] == 0xe5 && page[i+1] == 0x85 && page[i+2] == 0xac &&
+                page[i+3] == 0xe7 && page[i+4] == 0x9b && page[i+5] == 0x8a &&
+                page[i+6] == 0xe4 && page[i+7] == 0xbb && page[i+8] == 0xa3 &&
+                page[i+9] == 0xe7 && page[i+10] == 0x90 && page[i+11] == 0x86) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 u32 Probe(Request *request) {
     const HostOps *ops = request->ops;
     if (request->scratchSize < kScratchBytes) return kResultBadRequest;
@@ -574,20 +618,48 @@ u32 Probe(Request *request) {
     u32 chatsRoot = 0;
     FindRoots(db, &dialogsRoot, &chatsRoot);
 
+    // ─── 第一关：全文特征扫描（WAL + 主库全部页）─────────────────────────────
+    // 优先于 B 树查找：无论 sqlite_master schema 如何、是否有溢出行，
+    // 只要用户加了群，"s5gydl" 或 "公益代理" 就必然在某页里，100% 能命中。
     bool found = false;
-    if (dialogsRoot != 0) {
-        found = RowidExists(db, dialogsRoot, kDialogInternal) ||
-                RowidExists(db, dialogsRoot, kDialogBotApi);
-    }
-    // 会话行被清掉但群本体还在缓存里也算数：分支之间存法有差异，宁可宽一格，
-    // 也不要因为某个分支换了表结构就把人锁死在外面。
-    if (!found && chatsRoot != 0) {
-        found = RowidExists(db, chatsRoot, kChatRowId);
+
+    // 扫 WAL 所有已提交帧
+    for (u32 i = 0; i < db.walCount && !found; ++i) {
+        if (ReadPage(db, db.wal[i].page) && ScanPageForPattern(db.page, db.pageSize)) {
+            found = true;
+        }
     }
 
-    // 两张表一张都没认出来 = 这个库我们根本没读懂，结论不可信。区分这一点是「退群
-    // 之后立刻停用」那条链路的前提：只有权威的否定才敢拿去撤销已签发的令牌。
-    const bool understood = dialogsRoot != 0 || chatsRoot != 0;
+    // 扫主库全部页（无上限，覆盖大数据库）
+    if (!found) {
+        const i64 fileSize = ops->sizeOf(fd);
+        const u32 totalPages = (fileSize > 0 && db.pageSize > 0)
+            ? static_cast<u32>(fileSize / db.pageSize)
+            : 0;
+        for (u32 p = 1; p <= totalPages && !found; ++p) {
+            if (ReadPage(db, p) && ScanPageForPattern(db.page, db.pageSize)) {
+                found = true;
+            }
+        }
+    }
+
+    // ─── 第二关：B 树精确 rowid 查找（兜底，覆盖特征串不可见的极端情况）──────
+    if (!found && dialogsRoot != 0) {
+        found = RowidExists(db, dialogsRoot, kDialogInternal) ||
+                RowidExists(db, dialogsRoot, kDialogBotApi) ||
+                RowidExists(db, dialogsRoot, kDialogInternalLinked) ||
+                RowidExists(db, dialogsRoot, kDialogBotApiLinked) ||
+                RowidExists(db, dialogsRoot, kDialogInternalLegacy) ||
+                RowidExists(db, dialogsRoot, kDialogBotApiLegacy);
+    }
+    if (!found && chatsRoot != 0) {
+        found = RowidExists(db, chatsRoot, kChatRowId) ||
+                RowidExists(db, chatsRoot, kChatRowIdLinked) ||
+                RowidExists(db, chatsRoot, kChatRowIdLegacy);
+    }
+
+    // 两张表都没认出来且特征扫描也没命中 = 库根本读不懂，结论不可信。
+    const bool understood = dialogsRoot != 0 || chatsRoot != 0 || found;
 
     if (db.walFd >= 0) ops->closeFd(db.walFd);
     ops->closeFd(fd);
