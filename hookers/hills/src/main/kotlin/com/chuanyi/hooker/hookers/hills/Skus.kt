@@ -53,8 +53,11 @@ internal object Skus {
     /** Optional setting: pin the product id instead of learning it. */
     const val KEY_LIFETIME_SKU = "lifetime_sku"
 
+    /** Default known lifetime product IDs to guarantee instant unlock on cold launch without relearning */
+    private val DEFAULT_KNOWN_SKUS = listOf("hills.pro.lifetime", "hills.pro")
+
     /** Every one-time product id the app has asked Play about, this run or before. */
-    private val known = CopyOnWriteArrayList<String>()
+    private val known = CopyOnWriteArrayList<String>(DEFAULT_KNOWN_SKUS)
 
     /** The id the app last opened the Play purchase sheet for, if it ever did. */
     private val purchased = AtomicReference<String?>(null)

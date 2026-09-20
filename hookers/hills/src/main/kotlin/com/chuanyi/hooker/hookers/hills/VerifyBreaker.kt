@@ -50,7 +50,7 @@ internal object VerifyBreaker {
      * purchases within tens of milliseconds of the billing client connecting,
      * and [awaitReady] holds that answer back until this is done.
      */
-    private val RETRY_DELAYS_MS = longArrayOf(150, 250, 400, 1_000, 2_000, 5_000, 10_000, 20_000, 40_000)
+    private val RETRY_DELAYS_MS = longArrayOf(50, 100, 150, 250, 400, 1_000, 2_000, 5_000, 10_000, 20_000, 40_000)
 
     private val started = AtomicBoolean(false)
 
