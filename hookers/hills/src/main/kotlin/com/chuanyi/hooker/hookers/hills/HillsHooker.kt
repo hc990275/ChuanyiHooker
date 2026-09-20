@@ -118,6 +118,8 @@ class HillsHooker : AppHooker {
                 }
                 chain.proceed()
             }
+        }.onFailure {
+            scope.log.e("Failed to hook Activity.onCreate", it)
         }
 
         // Unconditional: which product id means "lifetime" is an input to two

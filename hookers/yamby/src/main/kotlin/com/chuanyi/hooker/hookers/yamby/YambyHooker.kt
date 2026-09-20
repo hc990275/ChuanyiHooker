@@ -142,6 +142,9 @@ class YambyHooker : AppHooker {
             runCatching {
                 method.createAfterHook("yamby.entitlement.${method.name}") { param ->
                     val key = param.args.firstOrNull { it is String } as? String ?: return@createAfterHook
+                    if (method.returnType == boolType || method.returnType == longType || method.returnType == intType) {
+                        log.d("MMKV Access: ${method.name}($key) -> ${param.result}")
+                    }
                     val lowerKey = key.lowercase()
                     val isTarget = key in targetKeys ||
                         lowerKey.contains("pro") ||
