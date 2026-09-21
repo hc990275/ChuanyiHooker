@@ -235,6 +235,7 @@ android {
                 "proguard-rules.pro",
             )
             signingConfig = signingConfigs.findByName(signingConfigName)
+                ?: signingConfigs.findByName("debug")
         }
     }
 

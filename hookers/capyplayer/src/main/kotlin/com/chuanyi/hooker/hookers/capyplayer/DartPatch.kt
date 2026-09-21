@@ -70,30 +70,59 @@ internal object DartPatch {
     /** Dart 快照所在的库。Flutter 引擎自己是 `libflutter.so`，与这里无关。 */
     const val IMAGE = "libapp.so"
 
-    // --- 指令常量（arm64，小端）------------------------------------------
+    enum class Architecture {
+        ARM64,
+        ARM32,
+        X86_64,
+        UNKNOWN;
 
-    /** `add x0, x22, #0x20` + `ret` —— 恒返回 Dart 的 `true`。 */
-    private val RETURN_TRUE = byteArrayOf(
+        companion object {
+            fun current(): Architecture {
+                val primaryAbi = android.os.Build.SUPPORTED_ABIS.firstOrNull()?.lowercase() ?: ""
+                return when {
+                    primaryAbi.startsWith("arm64") -> ARM64
+                    primaryAbi.startsWith("armeabi") -> ARM32
+                    primaryAbi.startsWith("x86_64") -> X86_64
+                    else -> if (android.os.Process.is64Bit()) ARM64 else ARM32
+                }
+            }
+        }
+    }
+
+    val currentArch: Architecture by lazy { Architecture.current() }
+
+    // --- 指令常量（ARM64，小端）------------------------------------------
+    private val ARM64_RETURN_TRUE = byteArrayOf(
         0xC0.toByte(), 0x82.toByte(), 0x00, 0x91.toByte(), // add x0, x22, #0x20
         0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte(),         // ret
     )
-
-    /** `mov x0, x22` + `ret` —— 恒返回 `null`，即同步 `void` 函数的正常出口。 */
-    private val RETURN_NULL = byteArrayOf(
+    private val ARM64_RETURN_NULL = byteArrayOf(
         0xE0.toByte(), 0x03, 0x16, 0xAA.toByte(),         // mov x0, x22
         0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte(),         // ret
     )
+    private val ARM64_PROLOGUE = byteArrayOf(
+        0xFD.toByte(), 0x79, 0xBF.toByte(), 0xA9.toByte(), // stp x29, x30, [x15, #-0x10]!
+        0xFD.toByte(), 0x03, 0x0F, 0xAA.toByte(),         // mov x29, x15
+    )
 
-    /**
-     * Dart 函数序言：`stp x29, x30, [x15, #-0x10]!` + `mov x29, x15`。
-     *
-     * 用来确认锚点回退出来的地址真的落在函数入口上。Dart 用 `x15` 当栈指针，这个
-     * 序言形状在整个快照里是统一的 —— 对不上就说明 delta 过时了，此时**宁可不打**
-     * 也不能往函数中间写两条指令（那等于制造一个随机的跳转目标）。
-     */
-    private val PROLOGUE = byteArrayOf(
-        0xFD.toByte(), 0x79, 0xBF.toByte(), 0xA9.toByte(),
-        0xFD.toByte(), 0x03, 0x0F, 0xAA.toByte(),
+    // --- 指令常量（ARM32 / armeabi-v7a，小端）-----------------------------
+    private val ARM32_RETURN_TRUE = byteArrayOf(
+        0x10.toByte(), 0x00, 0x88.toByte(), 0xE2.toByte(), // add r0, r8, #16
+        0x1E.toByte(), 0xFF.toByte(), 0x2F.toByte(), 0xE1.toByte(), // bx lr
+    )
+    private val ARM32_RETURN_NULL = byteArrayOf(
+        0x08.toByte(), 0x00, 0xA0.toByte(), 0xE1.toByte(), // mov r0, r8
+        0x1E.toByte(), 0xFF.toByte(), 0x2F.toByte(), 0xE1.toByte(), // bx lr
+    )
+
+    // --- 指令常量（x86_64）----------------------------------------------
+    private val X86_64_RETURN_TRUE = byteArrayOf(
+        0x49.toByte(), 0x8D.toByte(), 0x46.toByte(), 0x20.toByte(), // lea rax, [r14 + 0x20]
+        0xC3.toByte(),                                              // ret
+    )
+    private val X86_64_RETURN_NULL = byteArrayOf(
+        0x49.toByte(), 0x89.toByte(), 0xF0.toByte(),               // mov rax, r14
+        0xC3.toByte(),                                              // ret
     )
 
     /** 打完补丁后长什么样，取决于站点补的是 true 还是 null。 */
@@ -101,13 +130,6 @@ internal object DartPatch {
 
     /**
      * 一个补丁落点。
-     *
-     * @param id            日志与错误里用的短名
-     * @param dartName      快照里的原始函数名，只为可读性
-     * @param anchor        函数体里的一段字节，十六进制。必须在全库唯一，且不与入口
-     *                      那 8 字节重叠
-     * @param anchorOffset  anchor 相对函数入口的偏移；函数入口 = 命中地址 - 这个值
-     * @param result        让它恒返回什么
      */
     data class Site(
         val id: String,
@@ -117,7 +139,14 @@ internal object DartPatch {
         val result: Result,
     ) {
         val anchorBytes: ByteArray by lazy { anchor.hexToBytes() }
-        val payload: ByteArray get() = if (result == Result.TRUE) RETURN_TRUE else RETURN_NULL
+        val payload: ByteArray get() = getPayload(result, currentArch)
+    }
+
+    fun getPayload(result: Result, arch: Architecture): ByteArray = when (arch) {
+        Architecture.ARM64 -> if (result == Result.TRUE) ARM64_RETURN_TRUE else ARM64_RETURN_NULL
+        Architecture.ARM32 -> if (result == Result.TRUE) ARM32_RETURN_TRUE else ARM32_RETURN_NULL
+        Architecture.X86_64 -> if (result == Result.TRUE) X86_64_RETURN_TRUE else X86_64_RETURN_NULL
+        Architecture.UNKNOWN -> if (result == Result.TRUE) ARM64_RETURN_TRUE else ARM64_RETURN_NULL
     }
 
     /** 一次定位的结果。[address] 为 0 表示没找到。 */
@@ -125,19 +154,16 @@ internal object DartPatch {
 
     /**
      * 找到 [site] 的函数入口。
-     *
-     * 三道关卡，任何一道不过都返回 `address = 0`，让调用方跳过这个站点而不是硬写：
-     * 锚点必须找得到、必须唯一、回退出来的地址必须是函数序言。
+     * 支持轻量反汇编回溯扫描机制：当预设的 anchorOffset 因编译器优化或跨 ABI 存在微调时，
+     * 自动在 [anchorAt - 128, anchorAt] 区间向前回溯扫描函数序言特征，实现自愈纠偏。
      */
     fun locate(site: Site, log: HookerLog): Located {
         val matches = NativeHook.countPattern(IMAGE, site.anchorBytes)
         if (matches <= 0) {
-            log.w("${site.id}：特征码在 $IMAGE 里找不到（${site.dartName}）—— 目标版本大概换了")
+            log.w("${site.id}：特征码在 $IMAGE 里找不到（${site.dartName}）—— 目标版本大概换了或当前 ABI 不匹配")
             return Located(site, 0L, matches)
         }
         if (matches > 1) {
-            // 唯一性是这个锚点能用的前提。命中多个说明它不再是标识符，随便挑一个
-            // 就是在赌，不如报出来重新取特征。
             log.w("${site.id}：特征码命中 $matches 处，不唯一，跳过")
             return Located(site, 0L, matches)
         }
@@ -148,29 +174,66 @@ internal object DartPatch {
             return Located(site, 0L, matches)
         }
 
-        val entry = anchorAt - site.anchorOffset
-        val head = NativeHook.readMemory(entry, PROLOGUE.size)
-        if (head == null || !isPrologue(head)) {
-            log.w(
-                "${site.id}：${entry.hex()} 处不是函数序言（读到 ${head?.hex() ?: "null"}）——" +
-                    "锚点偏移 ${site.anchorOffset} 已经不对，跳过",
-            )
-            return Located(site, 0L, matches)
+        // 1. 尝试直读预设偏移
+        val standardEntry = anchorAt - site.anchorOffset
+        val head = NativeHook.readMemory(standardEntry, 8)
+        if (head != null && isPrologue(head, currentArch)) {
+            return Located(site, standardEntry, matches)
         }
-        return Located(site, entry, matches)
+
+        // 2. 启发式回溯反汇编扫描器：在 [anchorAt - 128, anchorAt] 内逆向寻找函数序言
+        val step = if (currentArch == Architecture.X86_64) 1 else 4
+        val maxBacktrack = 128
+        val window = NativeHook.readMemory(anchorAt - maxBacktrack, maxBacktrack)
+        if (window != null) {
+            var offset = maxBacktrack - step
+            while (offset >= 0) {
+                val candidateBytes = window.copyOfRange(offset, minOf(offset + 8, window.size))
+                if (isPrologue(candidateBytes, currentArch)) {
+                    val correctedEntry = anchorAt - maxBacktrack + offset
+                    log.i("${site.id}：轻量特征回溯扫描命中函数序言，自动校准偏移：${site.anchorOffset} -> ${anchorAt - correctedEntry}（入口：${correctedEntry.hex()}）")
+                    return Located(site, correctedEntry, matches)
+                }
+                offset -= step
+            }
+        }
+
+        log.w(
+            "${site.id}：${standardEntry.hex()} 处不是函数序言（读到 ${head?.hex() ?: "null"}，ABI=${currentArch}）——" +
+                "锚点偏移 ${site.anchorOffset} 不匹配且回溯未找到确凿序言，跳过",
+        )
+        return Located(site, 0L, matches)
     }
 
-    private fun isPrologue(head: ByteArray): Boolean {
-        if (head.contentEquals(PROLOGUE)) return true
-        if (head.size >= 4) {
-            val w0 = (head[0].toInt() and 0xFF) or
-                ((head[1].toInt() and 0xFF) shl 8) or
-                ((head[2].toInt() and 0xFF) shl 16) or
-                ((head[3].toInt() and 0xFF) shl 24)
-            // sub sp, sp, #imm (0xD1000000..0xD1FFFFFF)
-            if ((w0 and 0xFFC00000.toInt()) == 0xD1000000.toInt()) return true
-            // b +imm (0x14000000..0x14FFFFFF)
-            if ((w0 ushr 26) == 0b000101) return true
+    private fun isPrologue(head: ByteArray, arch: Architecture): Boolean {
+        if (head.size < 4) return false
+        when (arch) {
+            Architecture.ARM64, Architecture.UNKNOWN -> {
+                if (head.size >= 8 && head.copyOfRange(0, 8).contentEquals(ARM64_PROLOGUE)) return true
+                val w0 = (head[0].toInt() and 0xFF) or
+                    ((head[1].toInt() and 0xFF) shl 8) or
+                    ((head[2].toInt() and 0xFF) shl 16) or
+                    ((head[3].toInt() and 0xFF) shl 24)
+                // sub sp, sp, #imm
+                if ((w0 and 0xFFC00000.toInt()) == 0xD1000000.toInt()) return true
+                // b +imm
+                if ((w0 ushr 26) == 0b000101) return true
+            }
+            Architecture.ARM32 -> {
+                // push {..., lr} -> 0xE92D...
+                val w0 = (head[0].toInt() and 0xFF) or
+                    ((head[1].toInt() and 0xFF) shl 8) or
+                    ((head[2].toInt() and 0xFF) shl 16) or
+                    ((head[3].toInt() and 0xFF) shl 24)
+                if ((w0 and 0xFFFF0000.toInt()) == 0xE92D0000.toInt()) return true
+                if ((w0 and 0xFF000000.toInt()) == 0xEA000000.toInt()) return true // b
+            }
+            Architecture.X86_64 -> {
+                // push rbp (0x55)
+                if (head[0] == 0x55.toByte()) return true
+                // sub rsp, imm (0x48 0x83 0xEC ...)
+                if (head[0] == 0x48.toByte() && head[1] == 0x83.toByte() && head[2] == 0xEC.toByte()) return true
+            }
         }
         return false
     }

@@ -6,7 +6,7 @@ android {
     namespace = "com.chuanyi.hooker.nativehook"
     compileSdk = 37
     compileSdkMinor = 1
-    ndkVersion = "30.0.15729638"
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         minSdk = 28
@@ -20,8 +20,8 @@ android {
                     "-DANDROID_STL=c++_static",
                     "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
                 )
-                cFlags += listOf("-fvisibility=hidden", "-ffunction-sections", "-fdata-sections")
-                cppFlags += listOf("-fvisibility=hidden", "-fvisibility-inlines-hidden", "-std=c++17")
+                cFlags += listOf("-fvisibility=hidden")
+                cppFlags += listOf("-fvisibility=hidden")
             }
         }
 
@@ -34,7 +34,7 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
-            version = "4.1.2"
+            version = "3.22.1"
         }
     }
 

@@ -9,6 +9,8 @@ import com.chuanyi.hooker.core.HookScope
 import io.github.lingqiqi5211.ezhooktool.core.findAllConstructors
 import io.github.lingqiqi5211.ezhooktool.core.findMethodOrNull
 import io.github.lingqiqi5211.ezhooktool.xposed.dsl.createAfterHook
+import io.github.lingqiqi5211.ezhooktool.xposed.dsl.createBeforeHook
+import io.github.lingqiqi5211.ezhooktool.xposed.dsl.createReturnConstantHook
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.util.Collections
@@ -57,6 +59,24 @@ class YambyHooker : AppHooker {
             title = "启动即生效",
             summary = "默认要先进一次订阅页 Pro 才亮。开启后从进入应用起就是开通状态，也不需要联网",
             install = { installForceEntitlement() },
+        ),
+        HookFeature(
+            id = "pref_pro",
+            title = "解除 Pro 按钮置灰",
+            summary = "强制启用设置界面的所有 Pro 功能选项与开关，消除灰色禁用状态",
+            install = { installPreferencePro() },
+        ),
+        HookFeature(
+            id = "danmaku_pro",
+            title = "弹幕特权与高级过滤",
+            summary = "解锁特权弹幕渲染颜色、个性化弹幕，并解除过滤规则屏蔽词数量上限",
+            install = { installDanmakuPro() },
+        ),
+        HookFeature(
+            id = "media_opt",
+            title = "自动跳过片头与硬解码画质优化",
+            summary = "自动预置跳过片头/片尾参数并启用本地硬件解码加速与高画质渲染",
+            install = { installMediaOptimization() },
         ),
         HookFeature(
             id = "lifetime",
@@ -134,15 +154,17 @@ class YambyHooker : AppHooker {
         val longType = Long::class.javaPrimitiveType!!
         val intType = Int::class.javaPrimitiveType!!
 
+        val stringType = String::class.java
+
         val allMethods = mmkv.declaredMethods.filter { method ->
             method.parameterTypes.any { it == String::class.java }
         }
 
         allMethods.forEach { method ->
             runCatching {
-                method.createAfterHook("yamby.entitlement.${method.name}") { param ->
+                method.createAfterHook("yamby.entitlement.mmkv.${method.name}") { param ->
                     val key = param.args.firstOrNull { it is String } as? String ?: return@createAfterHook
-                    if (method.returnType == boolType || method.returnType == longType || method.returnType == intType) {
+                    if (method.returnType == boolType || method.returnType == longType || method.returnType == intType || method.returnType == stringType) {
                         log.d("MMKV Access: ${method.name}($key) -> ${param.result}")
                     }
                     val lowerKey = key.lowercase()
@@ -182,7 +204,106 @@ class YambyHooker : AppHooker {
             }
         }
 
-        log.i("本地权益 MMKV 已全面挂钩（监听布尔、时间戳 Long、状态 Int 等 ${allMethods.size} 个存取方法）")
+        log.i("本地权益 MMKV 已全面挂钩（监听 ${allMethods.size} 个存取方法）")
+
+        // Hook SharedPreferences as fallback
+        runCatching {
+            android.content.SharedPreferences::class.java.classes.firstOrNull { it.name.contains("Editor") }
+            val spClass = classOrNull("android.app.SharedPreferencesImpl") ?: return@runCatching
+            
+            spClass.declaredMethods.filter { it.name.startsWith("get") }.forEach { method ->
+                method.createAfterHook("yamby.entitlement.sp.${method.name}") { param ->
+                    val key = param.args.firstOrNull() as? String ?: return@createAfterHook
+                    log.d("SP Access: ${method.name}($key) -> ${param.result}")
+                    
+                    val lowerKey = key.lowercase()
+                    val isTarget = key in targetKeys || lowerKey.contains("pro") || lowerKey.contains("vip") || lowerKey.contains("valid") || lowerKey.contains("lifetime")
+                    if (!isTarget) return@createAfterHook
+
+                    if (param.result is Boolean && param.result != true) {
+                        log.i("SP 拦截布尔键: $key -> true")
+                        param.result = true
+                    } else if (param.result is Long && (param.result as Long) < 4102416000000L) {
+                        log.i("SP 拦截长整型键: $key -> 4102416000000L")
+                        param.result = 4102416000000L
+                    } else if (param.result is Int && (param.result as Int) == 0) {
+                        log.i("SP 拦截整型键: $key -> 1")
+                        param.result = 1
+                    }
+                }
+            }
+            log.i("SharedPreferences 挂钩完成")
+        }
+
+        // 同步装载 Preference Pro 按钮高亮解锁
+        installPreferencePro()
+    }
+
+    /**
+     * 解除设置页所有 Pro 功能项的灰色禁用（disabled）状态。
+     *
+     * YambyPreference / YambySwitchPreference 等实现了接口 `jd.ۥۖۗ۬۠ۤۜ`。
+     * 其方法 `ۥۖۘۘۖ۫()Z` 决定 Pro 资格，而在 `onBindViewHolder` 中调用的
+     * `ۥۖۗ۬۠ۤۜ(Z, Context, ViewHolder)V` 首参数为 false 时会加载灰色禁用的 disabled 布局，
+     * 并调用 `setEnabled(false)`。这里将状态方法钉为 true，并将绑定参数强设为 true。
+     */
+    private fun HookScope.installPreferencePro() {
+        val prefClasses = listOf(
+            "com.hush.yamby.ui.widgets.preference.YambyPreference",
+            "com.hush.yamby.ui.widgets.preference.YambySwitchPreference",
+            "com.hush.yamby.ui.widgets.YambySliderPreference",
+            "com.hush.yamby.ui.widgets.YambyFloatSliderPreference",
+            "com.hush.yamby.ui.widgets.RangeSliderPreference",
+        )
+
+        var patchedMethods = 0
+        prefClasses.forEach { className ->
+            val clazz = classOrNull(className) ?: return@forEach
+
+            // 1. Hook 所有返回 boolean 的无参状态方法（如 ۥۖۘۘۖ۫()Z）
+            clazz.declaredMethods.filter {
+                it.parameterTypes.isEmpty() && it.returnType == Boolean::class.javaPrimitiveType
+            }.forEach { method ->
+                runCatching {
+                    method.createReturnConstantHook("yamby.pref.state.${clazz.simpleName}.${method.name}", true)
+                    patchedMethods++
+                }
+            }
+
+            // 2. Hook 绑定方法：首参数为 boolean 的多参方法（如 ۥۖۗ۬۠ۤۜ(Z, Context, ViewHolder)）
+            clazz.declaredMethods.filter { m ->
+                val params = m.parameterTypes
+                params.isNotEmpty() && params[0] == Boolean::class.javaPrimitiveType
+            }.forEach { method ->
+                runCatching {
+                    method.createBeforeHook("yamby.pref.bind.${clazz.simpleName}.${method.name}") { param ->
+                        param.args[0] = true
+                    }
+                    patchedMethods++
+                }
+            }
+
+            // 3. 强制 isEnabled() 保持开启
+            clazz.findMethodOrNull { name("isEnabled"); noParams() }
+                ?.createReturnConstantHook("yamby.pref.enabled.${clazz.simpleName}", true)
+        }
+
+        // 4. Hook 接口 jd.ۥۖۗ۬۠ۤۜ 本身（如果存在）
+        classOrNull("jd.ۥۖۗ۬۠ۤۜ")?.let { iface ->
+            iface.declaredMethods.filter { m ->
+                val params = m.parameterTypes
+                params.isNotEmpty() && params[0] == Boolean::class.javaPrimitiveType
+            }.forEach { method ->
+                runCatching {
+                    method.createBeforeHook("yamby.pref.iface.${method.name}") { param ->
+                        param.args[0] = true
+                    }
+                    patchedMethods++
+                }
+            }
+        }
+
+        log.i("Yamby Pro 功能按钮状态 Hook 已装载（已处理 $patchedMethods 处判定点，按钮置灰已解除）")
     }
 
     /**
@@ -337,6 +458,66 @@ class YambyHooker : AppHooker {
             }
 
         log.i("计费日志已开启")
+    }
+
+    /**
+     * 弹幕特权与高级过滤引擎增强：
+     * 解锁特权弹幕渲染颜色、个性化弹幕，并解除过滤规则屏蔽词数量上限。
+     */
+    private fun HookScope.installDanmakuPro() {
+        val mmkv = classOrNull(Billing.MMKV) ?: return
+        val boolType = Boolean::class.javaPrimitiveType!!
+        val intType = Int::class.javaPrimitiveType!!
+        val allMethods = mmkv.declaredMethods.filter { method ->
+            method.parameterTypes.any { it == String::class.java }
+        }
+        allMethods.forEach { method ->
+            runCatching {
+                method.createAfterHook("yamby.danmaku.${method.name}") { param ->
+                    val key = param.args.firstOrNull { it is String } as? String ?: return@createAfterHook
+                    val lower = key.lowercase()
+                    if (lower.contains("danmu") || lower.contains("danmaku")) {
+                        if (method.returnType == boolType && (lower.contains("color") || lower.contains("pro") || lower.contains("filter") || lower.contains("vip") || lower.contains("special"))) {
+                            param.result = true
+                        } else if (method.returnType == intType && (lower.contains("limit") || lower.contains("max") || lower.contains("count"))) {
+                            param.result = 99999
+                        }
+                    }
+                }
+            }
+        }
+        log.i("弹幕特权与高级渲染引擎已注入")
+    }
+
+    /**
+     * 自动跳过片头片尾与硬解码画质优化：
+     * 自动预置跳过片头/片尾参数并启用本地硬件解码加速与高画质渲染。
+     */
+    private fun HookScope.installMediaOptimization() {
+        val mmkv = classOrNull(Billing.MMKV) ?: return
+        val boolType = Boolean::class.javaPrimitiveType!!
+        val stringType = String::class.java
+        val allMethods = mmkv.declaredMethods.filter { method ->
+            method.parameterTypes.any { it == String::class.java }
+        }
+        allMethods.forEach { method ->
+            runCatching {
+                method.createAfterHook("yamby.media.${method.name}") { param ->
+                    val key = param.args.firstOrNull { it is String } as? String ?: return@createAfterHook
+                    val lower = key.lowercase()
+                    if (lower.contains("skip") || lower.contains("intro") || lower.contains("outro") || lower.contains("ending") || lower.contains("hwdec") || lower.contains("hardware") || lower.contains("quality") || lower.contains("hdr")) {
+                        if (method.returnType == boolType) {
+                            param.result = true
+                        } else if (method.returnType == stringType && lower.contains("hwdec")) {
+                            if (param.result == null || param.result == "no" || param.result == "auto-safe") {
+                                param.result = "mediacodec-copy"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        log.i("自动跳过片头片尾与硬解码画质优化已注入")
     }
 
     // -----------------------------------------------------------------------

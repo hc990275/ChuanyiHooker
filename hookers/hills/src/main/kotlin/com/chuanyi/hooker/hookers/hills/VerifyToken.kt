@@ -160,7 +160,30 @@ internal object VerifyToken {
             .put("exp", now + TTL_SECONDS)
         request?.optString("jti")?.takeIf { it.isNotEmpty() }?.let { payload.put("req_jti", it) }
 
-        return runCatching { JSONObject().put("token", sign(pair, payload)).toString() }.getOrNull()
+        val jwt = runCatching { JSONObject().put("token", sign(pair, payload)).toString() }.getOrNull()
+        return jwt
+    }
+
+    /**
+     * 将生成的自签名凭据与密钥对持久化落盘至目标 App 的 files 目录，
+     * 确保后续离线冷启动时即刻具备免死金牌，无需重入生成耗时。
+     */
+    fun persistGrant(filesDir: java.io.File, body: String) {
+        runCatching {
+            if (!filesDir.exists()) filesDir.mkdirs()
+            val target = java.io.File(filesDir, VerifyServer.OVERRIDE_FILE)
+            target.writeText(body, Charsets.UTF_8)
+        }
+    }
+
+    /**
+     * 读取本地已持久化的 JWT 授权凭据。
+     */
+    fun loadPersistedGrant(filesDir: java.io.File): String? {
+        return runCatching {
+            val target = java.io.File(filesDir, VerifyServer.OVERRIDE_FILE)
+            if (target.isFile && target.length() > 0) target.readText(Charsets.UTF_8) else null
+        }.getOrNull()
     }
 
     private fun sign(pair: KeyPair, payload: JSONObject): String {

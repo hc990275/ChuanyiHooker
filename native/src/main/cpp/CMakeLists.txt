@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(chuanyihook CXX C)
+project(chuanyihook C CXX ASM)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

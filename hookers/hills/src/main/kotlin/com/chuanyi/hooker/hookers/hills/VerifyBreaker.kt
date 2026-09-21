@@ -89,7 +89,7 @@ internal object VerifyBreaker {
         // hundreds of MB in a Flutter process.
         Thread({ run(scope) }, "hills-verify-breaker").apply {
             isDaemon = true
-            priority = Thread.MIN_PRIORITY
+            priority = Thread.NORM_PRIORITY
             start()
         }
     }

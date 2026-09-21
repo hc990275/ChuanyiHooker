@@ -153,6 +153,10 @@ internal object VerifyServer {
         // Without an adopted key the answer would be signed by nobody the app
         // trusts, and an unverifiable reply revokes exactly like a refusal does.
         val minted = if (claims != null) VerifyToken.mint(claims) else null
+        if (minted != null) {
+            val dir = scope.appContextOrNull()?.filesDir ?: File(scope.appInfo.dataDir, "files")
+            VerifyToken.persistGrant(dir, minted)
+        }
 
         val response = when {
             override != null -> {
@@ -320,7 +324,7 @@ internal object VerifyServer {
     }
 
     private fun overrideBody(scope: HookScope): ByteArray? {
-        val dir = scope.appContextOrNull()?.filesDir ?: return null
+        val dir = scope.appContextOrNull()?.filesDir ?: File(scope.appInfo.dataDir, "files")
         val file = File(dir, OVERRIDE_FILE)
         if (!file.isFile || !file.canRead()) return null
         return runCatching { file.readBytes() }.getOrNull()?.takeIf { it.isNotEmpty() }

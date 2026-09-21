@@ -65,8 +65,8 @@ internal object Skus {
     /** Set once the last run's catalogue has been read back, or proven absent. */
     private val restored = AtomicBoolean(false)
 
-    /** Set once anything has been learned; only gates [onLearned], not the value. */
-    private val announced = AtomicReference<String?>(null)
+    /** Set once anything has been learned; pre-seeded with default known SKU to fire on cold launch */
+    private val announced = AtomicReference<String?>("hills.pro.lifetime")
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
 
     /**

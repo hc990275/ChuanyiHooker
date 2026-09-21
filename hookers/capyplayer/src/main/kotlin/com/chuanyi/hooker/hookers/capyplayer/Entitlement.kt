@@ -85,24 +85,17 @@ internal object Entitlement {
             anchorOffset = 0x1c,
             result = Result.TRUE,
         ),
-        // CapyPlayer 1.1.3 (11312) 兼容锚点
-        Site(
-            id = "subscribed_v113",
-            dartName = "isSubscribed(Ref) [isSubscribedProvider] (v1.1.3)",
-            anchor = "89040054403F40F900B44EF9",
-            anchorOffset = 0x14,
-            result = Result.TRUE,
-        ),
-        // proFeatureEntitlement(Ref, feature)：1.1.5 唯一存在 (0x784860) -> entry 0x784800
+        // proFeatureEntitlement(Ref, feature) 判断求值函数
+        // CapyPlayer 1.1.5 (11512) 唯一锚点 (0x784aa4) -> entry 0x784a88
         Site(
             id = "entitlement",
             dartName = "proFeatureEntitlement(Ref, ProFeature)",
-            anchor = "FF0110EB29080054403F40F9",
-            anchorOffset = 0x60,
+            anchor = "20F040B800801C8B7027409110EE44F9",
+            anchorOffset = 0x1c,
             result = Result.TRUE,
         ),
         // SubscriptionNotifier._checkIfActive
-        // CapyPlayer 1.1.5 (11512) 16字节唯一锚点 (0x8220a8)
+        // CapyPlayer 1.1.5 (11512) 16字节唯一锚点 (0x8220a8) -> entry 0x8220a0
         Site(
             id = "active",
             dartName = "SubscriptionNotifier._checkIfActive",
@@ -110,26 +103,13 @@ internal object Entitlement {
             anchorOffset = 0x8,
             result = Result.TRUE,
         ),
-        // CapyPlayer 1.1.3 (11312) 兼容锚点
-        Site(
-            id = "active_v113",
-            dartName = "SubscriptionNotifier._checkIfActive (v1.1.3)",
-            anchor = "EF4100D1E00302AAE20303AA",
-            anchorOffset = 0x8,
-            result = Result.TRUE,
-        ),
-        Site(
-            id = "paywall",
-            dartName = "PaywallGuard|ensureEntitled",
-            anchor = "E10302AAA2031FF8823041B8",
-            anchorOffset = 0x10,
-            result = Result.TRUE,
-        ),
+        // NativePlayerSubtitleSearchBridge._ensureSubtitleSearchEntitled
+        // CapyPlayer 1.1.5 (11512) 28字节唯一锚点 (0xfbb048) -> entry 0xfbb040
         Site(
             id = "subtitle",
             dartName = "NativePlayerSubtitleSearchBridge._ensureSubtitleSearchEntitled",
-            anchor = "A0831FF8403F40F900984EF9",
-            anchorOffset = 0x20,
+            anchor = "EF2100D1502740F9FF0110EB89020054207040B800801C8BE10300AA",
+            anchorOffset = 0x8,
             result = Result.NULL,
         ),
     )

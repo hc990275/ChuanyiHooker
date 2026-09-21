@@ -80,25 +80,37 @@ internal object HillsHeap {
         urls?.let { return it }
 
         val pinned = scope.string(KEY_URL_MATCH)?.takeIf { it.isNotBlank() }
-        val candidates = NativeHook.findAscii("https://", minLength = 12, maxLength = MAX_URL)
+
+        // Fast path for Hills: 定向搜索已知 Supabase 函数端点，避免遍历全局数万个 URL 引起冷启动超时
+        val fastTarget = pinned ?: "https://api.hills.im/functions/v1"
+        val fastHits = NativeHook.findAscii(fastTarget, minLength = 12, maxLength = MAX_URL)
             .mapNotNull(::sanitiseUrl)
             .distinct()
-        if (candidates.isEmpty()) return emptyList()
 
-        val chosen: List<String> = if (pinned != null) {
-            val matching = candidates.filter { it.contains(pinned, ignoreCase = true) }
-            if (matching.isNotEmpty()) {
-                matching
+        val chosen: List<String> = if (fastHits.isNotEmpty()) {
+            scope.log.i("定向快速路径命中验证端点: $fastHits")
+            fastHits
+        } else {
+            val candidates = NativeHook.findAscii("https://", minLength = 12, maxLength = MAX_URL)
+                .mapNotNull(::sanitiseUrl)
+                .distinct()
+            if (candidates.isEmpty()) return emptyList()
+
+            if (pinned != null) {
+                val matching = candidates.filter { it.contains(pinned, ignoreCase = true) }
+                if (matching.isNotEmpty()) {
+                    matching
+                } else {
+                    scope.log.w("no URL in memory contains '$pinned', falling back to scoring")
+                    resolveCandidates(scope, candidates)
+                }
             } else {
-                scope.log.w("no URL in memory contains '$pinned', falling back to scoring")
                 resolveCandidates(scope, candidates)
             }
-        } else {
-            resolveCandidates(scope, candidates)
         }
 
         if (chosen.isEmpty()) {
-            scope.log.d("no verification endpoint among ${candidates.size} URL(s): $candidates")
+            scope.log.d("no verification endpoint found in memory")
             return emptyList()
         }
         urls = chosen
