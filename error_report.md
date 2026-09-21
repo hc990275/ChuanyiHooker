@@ -189,3 +189,17 @@
 1. **顶层 CMake 语言声明健全**：在 `native/src/main/cpp/CMakeLists.txt` 顶层统一声明 `project(chuanyihook C CXX ASM)`，使 Android NDK 预置工具链在最顶层完成全部汇编器与 C/C++ 交叉编译参数配置。
 2. **虚拟驱动盘无损规避中文路径限制**：通过 Windows 虚拟驱动盘 `subst`（如 `subst P: "d:\DeskTop\GitHub\测"`），将路径映射为纯 ASCII 的 `P:\project_11_chuanyi_hooker` 进行 Native 与 APK 构建。既完全不污染、不搬迁物理磁盘文件，又完美绕过了 NDK 与 CMake 的非 ASCII 崩溃缺陷。
 3. **打包架构精简与签名兜底**：在 `build.gradle.kts` 中明确启用 `arm64-v8a` 与 `x86_64` 双 64 位原生架构，并配置未提供私钥时的 Debug 签名兜底机制，保证 Release APK 打包完成后即可直接在 Android 64 位真机及模拟器上直接安装验证。
+
+---
+
+## 10. CI/CD 云端构建与 Daemon JVM Toolchain 踩坑 (GitHub Actions)
+
+### 问题现象
+在 GitHub Actions Ubuntu-latest 运行 `./gradlew :app:assembleRelease` 时直接崩溃中断，报错：
+`ToolchainDownloadException: Unable to download toolchain matching the requirements ({languageVersion=26, vendor=any vendor}) from 'null', due to: No defined toolchain download url for LINUX on x86_64 architecture.`
+
+### 根本原因
+`gradle/gradle-daemon-jvm.properties` 中错误写成了 `toolchainVersion=26`。虽然项目自身只需要 JDK >= 25（运行 EzHookTool 1.1.3 的 Java 25 字节码），但当配置为 26 时，Gradle 发现环境中的 Oracle JDK 25 不匹配，遂触发自动下载 Java 26，而 Linux x86_64 上尚无 GA 版 Java 26 的预置下载源，引发构建中断。
+
+### 解决方案
+将 `gradle/gradle-daemon-jvm.properties` 中的 `toolchainVersion` 纠正为 `25`，与 CI 配置的 JDK 25 严格对齐，彻底消除多余的 Toolchain 下载动作。

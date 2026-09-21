@@ -16,7 +16,7 @@ Xposed 模块宿主，**一个目标应用一个 hooker 模块**。框架侧（`
 ### 环境硬约束（踩到就是编不过，且报错常常指向别处）
 
 * **JDK ≥ 25**：EzHookTool 1.1.3 是 Java 25 字节码，Kotlin 编译器和 javac 都得跑在上面。要求钉在
-  `gradle/gradle-daemon-jvm.properties`（`toolchainVersion=26`），它压过 `org.gradle.java.home` 和
+  `gradle/gradle-daemon-jvm.properties`（`toolchainVersion=25`），它压过 `org.gradle.java.home` 和
   IDE 的 Gradle JDK 设置。**Android Studio 每次 sync 会把这文件改回自带的 JBR 21** —— 突然报
   `invalid source release: 25` 先查它。
 * **compileSdk 37 + `compileSdkMinor = 1`**（`libxposed:api:102` 要求），本机装的是 `android-37.1`。
