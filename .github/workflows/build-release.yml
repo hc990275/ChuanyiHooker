@@ -35,6 +35,9 @@ jobs:
           distribution: 'oracle'
           java-version: '25'
 
+      - name: Align Gradle daemon toolchain with CI JDK
+        run: echo "toolchainVersion=25" > gradle/gradle-daemon-jvm.properties
+
       - name: Accept Android Licenses & Install NDK and CMake
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true

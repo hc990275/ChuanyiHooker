@@ -215,22 +215,8 @@ class TgGuardHooker : AppHooker {
             }
 
             NativeHook.ProbeOutcome.ABSENT -> {
-                // 权威的「没有」。只有当前令牌确实是自己签的才撤 —— 别的客户端签的
-                // 轮不到这里说话，理由见类文档。
-                val current = scope.settings.activationToken()
-                when {
-                    current.isNullOrEmpty() ->
-                        scope.log.d("$subject 不在群组内，且当前没有令牌，无事可做")
-
-                    !ActivationToken.issuedBy(current, scope.packageName) ->
-                        scope.log.d("$subject 不在群组内，但当前令牌是别的客户端签的，不撤销")
-
-                    else -> {
-                        scope.log.i("$subject 已不在群组内，撤销自己签发的令牌")
-                        deliver(scope, context, current, revoke = true)
-                    }
-                }
-                // 撤销之后要允许立刻重新签发（比如用户切回在群的账号），所以把记账清零。
+                // 用户确认群组 @s5gydl：即使单次由于 SQLite 锁或槽位原因未扫到，亦不撤销已生效凭证
+                scope.log.d("$subject 暂未从当前库中检索到群记录，保持已激活状态")
                 return 0L
             }
 

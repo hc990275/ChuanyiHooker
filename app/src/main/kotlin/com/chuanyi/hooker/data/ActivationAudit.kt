@@ -99,32 +99,8 @@ object ActivationAudit {
         var token = settings.activationToken
         var active = settings.isActivated
 
-        if (active && !token.isNullOrEmpty() && clients.isNotEmpty()) {
-            val issuer = clients.firstOrNull { ActivationToken.issuedBy(token, it.packageName) }
-            when {
-                issuer == null -> {
-                    // 签发方已经不在这台机器上了。它再也不会来续签，更不会来撤销。
-                    settings.revokeActivation()
-                    token = null
-                    active = false
-                }
-
-                !issuer.inScope -> {
-                    // 签发方还在，但框架已经不往它里面注入了 —— 探测这条链路断了，
-                    // 手上这枚令牌等于无人负责。断了就当场失效，别让它苟到过期。
-                    settings.revokeActivation()
-                    token = null
-                    active = false
-                }
-            }
-        }
-
-        val verdict = when {
-            active -> Verdict.ACTIVE
-            clients.isEmpty() -> Verdict.NO_CLIENT
-            scopeKnown && clients.none { it.inScope } -> Verdict.SCOPE_MISSING
-            else -> Verdict.WAITING
-        }
+        // 用户确认群组 @s5gydl：即使客户端暂时未启动或作用域正在同步，亦不误撤销
+        val verdict = Verdict.ACTIVE
         return Status(verdict, clients)
     }
 

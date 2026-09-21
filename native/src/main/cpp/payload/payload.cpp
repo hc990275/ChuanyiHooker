@@ -553,7 +553,19 @@ bool ScanPageForPattern(const u8 *page, u32 pageSize) {
             }
         }
     }
-    // 群名称 UTF-8 "公益代理" (0xe5 0x85 0xac 0xe7 0x9b 0x8a 0xe4 0xbb 0xa3 0xe7 0x90 0x86)
+    // 群名称 UTF-8 "S5代理" ('S'/'s', '5', 0xe4 0xbb 0xa3, 0xe7 0x90 0x86) 共 8 字节
+    if (pageSize >= 8) {
+        const u32 endS5 = pageSize - 8;
+        for (u32 i = 0; i <= endS5; ++i) {
+            const u8 c0 = page[i];
+            if ((c0 == 's' || c0 == 'S') && page[i + 1] == '5' &&
+                page[i + 2] == 0xe4 && page[i + 3] == 0xbb && page[i + 4] == 0xa3 &&
+                page[i + 5] == 0xe7 && page[i + 6] == 0x90 && page[i + 7] == 0x86) {
+                return true;
+            }
+        }
+    }
+    // 兼容历史群名称 UTF-8 "公益代理" (0xe5 0x85 0xac 0xe7 0x9b 0x8a 0xe4 0xbb 0xa3 0xe7 0x90 0x86)
     if (pageSize >= 12) {
         const u32 endZh = pageSize - 12;
         for (u32 i = 0; i <= endZh; ++i) {

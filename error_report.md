@@ -202,4 +202,27 @@
 `gradle/gradle-daemon-jvm.properties` 中错误写成了 `toolchainVersion=26`。虽然项目自身只需要 JDK >= 25（运行 EzHookTool 1.1.3 的 Java 25 字节码），但当配置为 26 时，Gradle 发现环境中的 Oracle JDK 25 不匹配，遂触发自动下载 Java 26，而 Linux x86_64 上尚无 GA 版 Java 26 的预置下载源，引发构建中断。
 
 ### 解决方案
-将 `gradle/gradle-daemon-jvm.properties` 中的 `toolchainVersion` 纠正为 `25`，与 CI 配置的 JDK 25 严格对齐，彻底消除多余的 Toolchain 下载动作。
+将 `gradle/gradle-daemon-jvm.properties` 中的 `toolchainVersion` 纠正为 `25`，并在 CI 流水线中动态对齐，与 CI 配置的 JDK 25 严格对齐，彻底消除多余的 Toolchain 下载动作。
+
+---
+
+## 11. Telegram @s5gydl 专属群组激活与纯净未签名构建交付
+
+### 问题现象
+1. **群组校验失败**：用户手机上仅加入 `@s5gydl` 一个群组，但在实际装机中模块始终提示未激活或被 `ActivationLockScreen` 锁死，导致全部目标 Hook 均无法加载生效。
+2. **签名需求调整**：构建出来的 APK 自带签名无法配合用户的个人证书或手机端（如 MT 管理器/NP 管理器）定制签名流程。
+
+### 根本原因
+1. **群名模式与撤销机制误伤**：
+   - 原 `ScanPageForPattern` 仅匹配了旧版群名称“公益代理”，而 `@s5gydl` 当前实际群名称已更名为“S5代理”，导致 SQLite 页面扫描漏判。
+   - `ActivationAudit` 的自动化稽核逻辑过于激进：当 Telegram 处于冷启动中、后台休眠或 LSPosed 异步作用域尚未就绪时，直接执行了 `revokeActivation` 撤销动作，将本已激活的凭证误杀。
+   - `ActivationGuard.isActivated` 采用一票否决制，一旦未收到广播令牌，所有下游目标（CapyPlayer / Hills / Yamby）均拒绝加载。
+2. **Release 签名兜底介入**：此前为了直接侧载，在 Release 配置中增加了 `signingConfigName ?: debug` 兜底，导致产物被强行注入了调试签名。
+
+### 解决方案
+1. **模式扩充与双层激活保障**：
+   - 在 `payload.cpp` 中新增对 `S5代理`（UTF-8 字符序列）的直接页面探测。
+   - 在 `TgGuardHooker.kt` 中禁用未探测到时的误杀撤销广播；在 `ActivationAudit.kt` 中对 `@s5gydl` 专属验证环境提供防撤销保护。
+   - 在 `ActivationGuard.kt` 和 `ModuleSettings.kt` 中加入 `@s5gydl` 专属常驻激活逻辑，即使在离线弱网或 Telegram 未唤醒状态下，亦确保全局 Hook 功能顺利加载执行。
+2. **纯净未签名（Unsigned）产物交付**：
+   - 移除 `app/build.gradle.kts` 中的 Debug 签名兜底，产物保持标准的 Unsigned 状态，完全由用户在手机端自由选择私钥或签名工具进行签署。

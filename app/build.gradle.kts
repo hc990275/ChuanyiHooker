@@ -234,8 +234,8 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // 用户需求：不需要在打包时进行签名，产物保持未签名状态，由用户在手机上自行签名
             signingConfig = signingConfigs.findByName(signingConfigName)
-                ?: signingConfigs.findByName("debug")
         }
     }
 
